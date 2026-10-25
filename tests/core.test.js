@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { looseKeys, strictKey, stripMarks, transliterate, latinToCyrillic } from '../src/core/normalizer.js';
 import { Dictionary } from '../src/core/search.js';
+import { KEYS, MAIN_KEYS } from '../src/ui/keyboard.js';
 import { translateText, DIRECTIONS } from '../src/core/translator.js';
 
 const raw = JSON.parse(readFileSync(new URL('../data/curated/dictionary.json', import.meta.url), 'utf8'));
@@ -206,4 +207,41 @@ test('собранная база: таблицы форм из Викислов
 test('синодальная часть church-slavonic (Поляков) не используется', { skip: !hasIndex }, () => {
   const text = readFileSync(new URL('../scripts/build_full_dictionary.py', import.meta.url), 'utf8');
   assert.ok(!/syn\/(nouns|verbs|adjectives|pronouns|closed)/.test(text.replace(/#.*$/gm, '')), 'в сборке остались файлы syn/');
+});
+
+test('клавиатура: все кнопки обрабатываются поиском', () => {
+  const marks = /[\u0300-\u036f\u0483-\u0489]/;
+  for (const [ch, name] of KEYS) {
+    assert.ok(name, `у ${ch} нет названия`);
+    if (marks.test(ch)) {
+      assert.equal(strictKey(`а${ch}`), 'а', `знак ${name} не снимается`); // знаки над буквой не мешают поиску
+    } else {
+      const k = looseKeys(`а${ch}а`)[0];
+      assert.ok(/^[а-яё]*$/.test(k), `буква ${ch} (${name}) даёт ключ «${k}»`);
+    }
+  }
+  assert.equal(new Set(KEYS.map((k) => k[0])).size, KEYS.length, 'повторяющиеся кнопки');
+  for (const must of ['ѣ', 'ѧ', 'ѫ', 'ѩ', 'ѭ', 'ѡ', 'ѱ', 'ѯ', 'ѳ', 'ѵ', 'ѕ', 'і', 'ъ', 'ь', '\u0483', 'ꙁ', 'ꙋ', 'ѿ', 'ѻ', '\u0487']) {
+    assert.ok(MAIN_KEYS.some((k) => k[0] === must), `нет кнопки ${must}`);
+  }
+});
+
+test('нормализация: редкие буквы и знаки', () => {
+  assert.equal(looseKeys('ꙁемлѧ')[0], 'земля');
+  assert.equal(looseKeys('богꙋ')[0], 'бог' + 'у');
+  assert.equal(looseKeys('ѿвѣтъ')[0], 'ответ');
+  assert.equal(looseKeys('ꙇсꙋсъ')[0], 'исус');
+  assert.equal(looseKeys('отꙿцемъ')[0], 'отцем'); // паерок
+  assert.equal(looseKeys('ѝ')[0], 'и'); // готовая буква со знаком
+  assert.equal(strictKey('гд\u0487ь'), 'гдь'); // покрытие
+  assert.equal(strictKey('дꙋ\u0301хъ'), 'дꙋхъ'); // ударение
+});
+
+test('клавиатура покрывает буквы базы (частые символы)', { skip: !hasIndex }, () => {
+  const on = new Set(KEYS.map((k) => k[0]));
+  const counts = new Map();
+  for (const r of built.index.entries) for (const c of (r[0] + r[4] + r[7]).normalize('NFC')) counts.set(c, (counts.get(c) || 0) + 1);
+  const basic = /[а-яё_\s]/;
+  const missing = [...counts].filter(([c, n]) => !basic.test(c) && n >= 20 && !on.has(c) && !/[\u0300-\u036f\u0483-\u0489]/.test(c));
+  assert.deepEqual(missing, [], `буквы без кнопок: ${missing.map(([c, n]) => c + n).join(' ')}`);
 });

@@ -13,14 +13,14 @@
    "name": "church-slavonic: старославянский лексикон (части речи, род)",
    "url": "https://github.com/gold-silver-copper/church-slavonic",
    "license": "код MIT/Apache-2.0; данные старославянской части получены из Викисловаря (CC BY-SA 4.0)",
-   "entries": 5665
+   "entries": 5671
   },
   {
    "id": "syntacticus",
    "name": "Syntacticus dictionaries (PROIEL / TOROT): леммы, формы, частоты",
    "url": "https://github.com/proiel/syntacticus-dictionaries",
    "license": "CC BY-NC-SA 3.0/4.0 (некоммерческое использование, ShareAlike)",
-   "entries": 8636
+   "entries": 8645
   },
   {
    "id": "kaikki",
@@ -34,7 +34,7 @@
    "name": "Русский Викисловарь: старославянский, церковнославянский, древнерусский (выгрузка Kaikki.org / wiktextract)",
    "url": "https://kaikki.org/ruwiktionary/",
    "license": "CC BY-SA 4.0 (ShareAlike)",
-   "entries": 20242
+   "entries": 20235
   }
  ]
 }

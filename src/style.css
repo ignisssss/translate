@@ -188,3 +188,7 @@ table.para td { padding: 3px 18px 3px 0; white-space: nowrap; border-top: 1px so
 table.para tr:first-child th { border-bottom: 1px solid var(--border); }
 .form-btn { background: none; border: 0; padding: 0; margin: 0; cursor: pointer; color: inherit; font-size: inherit; }
 .form-btn:hover { color: var(--accent); text-decoration: underline; }
+
+.key-more { font-size: .9rem; color: var(--muted); }
+.kbd-extra { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.kbd-extra[hidden] { display: none; }
