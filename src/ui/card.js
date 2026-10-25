@@ -29,6 +29,43 @@ const KIND_LABEL = {
   },
 };
 
+export const LANG_LABEL = { chu: 'Старославянский', cs: 'Церковнославянский', orv: 'Древнерусский' };
+export const LANG_SHORT = { chu: 'ст.-слав.', cs: 'церк.-слав.', orv: 'др.-рус.' };
+
+const SOURCE_LABEL = {
+  manual: 'словарь проекта', dyachenko: 'Дьяченко (Большой церковно-славянский словарь)',
+  kcs: 'Краткий церковнославянский словарь', 'chu-dict': 'Old Church Slavonic Dictionary',
+  'chu-gloss': 'Old Church Slavonic Glossary', 'pitt-chu': 'Pitt (chu–eng)', 'pitt-orv': 'Pitt (древнерусско-русский)',
+  lexicon: 'church-slavonic (грамматика, ударения)', syntacticus: 'Syntacticus (формы, частоты)',
+  kaikki: 'Викисловарь',
+};
+
+const MAX_CHIPS = 40;
+
+/** Статья вместе с полными данными из чанка (если они уже загружены). */
+export function entryView(e) {
+  const d = e.detail || {};
+  return {
+    ...e,
+    ru: d.ru || e.ru,
+    en: d.en || e.en,
+    gloss: d.gloss || e.gloss || '',
+    grammar: d.grammar || e.grammar || '',
+    etymology: d.etymology || e.etymology || '',
+    greek: d.greek || e.greek || '',
+    note: d.note || e.note || '',
+    stress: d.stress || e.stress || '',
+    examples: d.examples || e.examples || [],
+    related: d.related || e.related || [],
+    variants: d.variants || e.variants || [],
+    forms: d.forms || e.forms || [],
+    titlo: d.titlo || e.titlo || [],
+    sources: d.sources || e.sources || [],
+    attested: d.attested || [],
+    freq: d.freq || 0,
+  };
+}
+
 function row(dl, label, node) {
   dl.appendChild(el('dt', null, label));
   const dd = el('dd');
@@ -36,20 +73,21 @@ function row(dl, label, node) {
   dl.appendChild(dd);
 }
 
-function chips(items, { cuFont = true, onClick } = {}) {
+function chips(items, { cuFont = true, onClick, max = MAX_CHIPS } = {}) {
   const box = el('div', 'chips');
-  for (const it of items) {
+  for (const it of items.slice(0, max)) {
     const c = onClick ? el('button', 'chip chip-btn') : el('span', 'chip');
     if (onClick) { c.type = 'button'; c.addEventListener('click', () => onClick(it)); }
     c.textContent = it;
     if (cuFont) c.classList.add('cu');
     box.appendChild(c);
   }
+  if (items.length > max) box.appendChild(el('span', 'chip chip-more', `и ещё ${items.length - max}`));
   return box;
 }
 
 /**
- * ctx: { dir, result, active, query, onSelectMatch(i), onOpenHeadword(h) }
+ * ctx: { dir, result, active, onSelectMatch(i), onOpenHeadword(h) }
  */
 export function renderCard(root, ctx) {
   root.textContent = '';
@@ -71,7 +109,7 @@ export function renderCard(root, ctx) {
   const matches = result.matches;
   const active = Math.min(ctx.active || 0, matches.length - 1);
   const m = matches[active];
-  const e = m.entry;
+  const e = entryView(m.entry);
 
   if (matches.length > 1) {
     const tabs = el('div', 'tabs');
@@ -82,7 +120,7 @@ export function renderCard(root, ctx) {
       b.setAttribute('role', 'tab');
       b.setAttribute('aria-selected', String(i === active));
       b.append(cu(x.entry.headword), ' ');
-      b.appendChild(el('small', null, x.entry.pos));
+      b.appendChild(el('small', null, LANG_SHORT[x.entry.lang] || ''));
       b.addEventListener('click', () => ctx.onSelectMatch(i));
       tabs.appendChild(b);
     });
@@ -92,10 +130,16 @@ export function renderCard(root, ctx) {
   const head = el('div', 'entry-head');
   head.appendChild(cu(e.headword, 'span')).classList.add('hw');
   head.appendChild(el('span', 'translit', `[${transliterate(e.headword)}]`));
-  head.appendChild(el('span', 'pos', e.pos));
-  const badge = el('span', 'badge badge-' + m.kind, (KIND_LABEL[dir] || {})[m.kind] || m.kind);
-  head.appendChild(badge);
+  if (e.pos) head.appendChild(el('span', 'pos', e.pos));
+  head.appendChild(el('span', 'badge badge-lang', LANG_LABEL[e.lang] || ''));
+  head.appendChild(el('span', 'badge badge-' + m.kind, (KIND_LABEL[dir] || {})[m.kind] || m.kind));
   root.appendChild(head);
+
+  if (e.stress) {
+    const s = el('p', 'via');
+    s.append('С ударением: ', cu(e.stress));
+    root.appendChild(s);
+  }
 
   if (m.kind === 'titlo') {
     const t = el('div', 'titlo-box');
@@ -119,37 +163,42 @@ export function renderCard(root, ctx) {
     const ol = el('ol', 'meanings');
     e.ru.forEach((r) => ol.appendChild(el('li', null, r)));
     mean.appendChild(ol);
-  } else if (e.en && e.en.length) {
-    mean.appendChild(el('p', 'muted', 'Русский перевод пока не добавлен. По-английски: ' + e.en.join('; ')));
+  }
+  if (e.en.length) {
+    mean.appendChild(el('p', e.ru.length ? 'sub' : 'muted',
+      (e.ru.length ? 'По-английски: ' : 'Русский перевод пока не добавлен. По-английски: ') + e.en.join('; ')));
   }
   if (e.gloss) mean.appendChild(el('p', 'gloss', e.gloss));
   row(dl, 'Толкование', mean);
 
   const gram = el('div');
-  gram.appendChild(el('p', null, e.grammar || e.pos));
-  if (e.forms.length) {
+  gram.appendChild(el('p', null, e.grammar || e.pos || 'Грамматические сведения не указаны'));
+  const forms = [...e.forms];
+  if (forms.length) {
     gram.appendChild(el('p', 'sub', 'Формы слова'));
-    gram.appendChild(chips(e.forms));
+    gram.appendChild(chips(forms));
   }
   row(dl, 'Грамматика', gram);
 
-  if (e.titlo.length) {
-    row(dl, 'Под титлом', chips(e.titlo));
-  }
-
+  if (e.variants.length) row(dl, 'Другие написания', chips(e.variants, { max: 20 }));
+  if (e.titlo.length) row(dl, 'Под титлом', chips(e.titlo));
   if (e.related.length) {
     row(dl, 'Однокоренные и связанные слова', chips(e.related, { onClick: ctx.onOpenHeadword }));
   }
   if (e.greek) row(dl, 'Греческий', el('span', 'greek', e.greek));
   if (e.etymology) row(dl, 'Этимология', el('span', null, e.etymology));
   if (e.note) row(dl, 'Примечание', el('span', null, e.note));
+  if (e.attested.length) {
+    row(dl, 'Засвидетельствовано', el('span', null, e.attested.join(', ') + (e.freq ? ` (всего употреблений: ${e.freq})` : '')));
+  }
 
   const ex = el('div');
   if (e.examples.length) {
     for (const x of e.examples) {
       const q = el('blockquote', 'example');
       q.appendChild(cu(x.cu, 'div')).classList.add('example-cu');
-      q.appendChild(el('div', 'example-ru', x.ru));
+      if (x.ru) q.appendChild(el('div', 'example-ru', x.ru));
+      if (x.en) q.appendChild(el('div', 'example-ru muted-i', x.en));
       if (x.source) q.appendChild(el('div', 'example-src', x.source));
       ex.appendChild(q);
     }
@@ -158,5 +207,13 @@ export function renderCard(root, ctx) {
   }
   row(dl, 'Пример', ex);
 
+  if (e.sources.length) {
+    row(dl, 'Источники', el('span', 'sub', e.sources.map((s) => SOURCE_LABEL[s] || s).join('; ')));
+  }
+
   root.appendChild(dl);
+
+  if (m.entry.chunk && !m.entry.detail) {
+    root.appendChild(el('p', 'loading', 'Загружается полная статья…'));
+  }
 }

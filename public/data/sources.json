@@ -1,0 +1,40 @@
+{
+ "generated": "2026-10-25",
+ "sources": [
+  {
+   "id": "manual",
+   "name": "Вручную составленный словарь проекта",
+   "url": "",
+   "license": "авторская работа проекта",
+   "entries": 172
+  },
+  {
+   "id": "lexicon",
+   "name": "church-slavonic: лексикон (части речи, род, ударения)",
+   "url": "https://github.com/gold-silver-copper/church-slavonic",
+   "license": "Apache-2.0 / MIT (данные частично получены из других источников)",
+   "entries": 8389
+  },
+  {
+   "id": "syntacticus",
+   "name": "Syntacticus dictionaries (PROIEL / TOROT): леммы, формы, частоты",
+   "url": "https://github.com/proiel/syntacticus-dictionaries",
+   "license": "CC BY-NC-SA 3.0/4.0 (некоммерческое использование, ShareAlike)",
+   "entries": 8636
+  },
+  {
+   "id": "kaikki",
+   "name": "Английский Викисловарь, язык cu (выгрузка Kaikki.org / wiktextract)",
+   "url": "https://kaikki.org/dictionary/Old%20Church%20Slavonic/",
+   "license": "CC BY-SA 4.0 (ShareAlike)",
+   "entries": 3276
+  },
+  {
+   "id": "ruwikt",
+   "name": "Русский Викисловарь: старославянский, церковнославянский, древнерусский (выгрузка Kaikki.org / wiktextract)",
+   "url": "https://kaikki.org/ruwiktionary/",
+   "license": "CC BY-SA 4.0 (ShareAlike)",
+   "entries": 20242
+  }
+ ]
+}

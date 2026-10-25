@@ -12,10 +12,13 @@ export function hasTitloMark(s) {
   return TITLO_MARK_RE.test(s);
 }
 
+const ANY_MARK_RE = /[̀-ͯ҃-҉ⷠ-ⷿ꙯-꙽ꚞꚟ]/;
+
 /** Снимает титла и диакритику, сохраняя значащие надстрочные буквы. */
 export function stripMarks(s) {
+  s = s.normalize('NFC');
+  if (!ANY_MARK_RE.test(s)) return s; // быстрый путь: в большинстве слов знаков нет
   return s
-    .normalize('NFC')
     .replace(SUPER_RE, (c) => SUPERSCRIPT[c.charCodeAt(0) - 0x2de0])
     .replace(MARKS_RE, '');
 }
@@ -35,10 +38,9 @@ const LOOSE_MAP = {
 };
 const VOWELS = 'аеиоуыюяѣѧѫѩѭѥꙗёэ';
 
+const LOOSE_RE = new RegExp(`[${Object.keys(LOOSE_MAP).join('')}]`, 'g');
 function mapChars(s) {
-  let out = '';
-  for (const c of s) out += Object.prototype.hasOwnProperty.call(LOOSE_MAP, c) ? LOOSE_MAP[c] : c;
-  return out;
+  return s.replace(LOOSE_RE, (c) => LOOSE_MAP[c]);
 }
 
 /**
@@ -50,7 +52,7 @@ export function looseKeys(s) {
   const base = mapChars(strictKey(s).replace(/оу/g, 'у'));
   const plain = base.replace(/[ъь]/g, '');
   const keys = new Set([plain]);
-  if (/[ъь]/.test(base)) {
+  if (plain.length !== base.length && /[ъь]/.test(base) && /р[ъь]|лъ/.test(base)) {
     let full = '';
     for (let i = 0; i < base.length; i++) {
       const c = base[i];

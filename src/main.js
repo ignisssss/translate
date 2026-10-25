@@ -2,7 +2,7 @@ import './style.css';
 import { Dictionary } from './core/search.js';
 import { DIRECTIONS, translateText } from './core/translator.js';
 import { mountKeyboard } from './ui/keyboard.js';
-import { renderCard } from './ui/card.js';
+import { LANG_SHORT, renderCard } from './ui/card.js';
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -137,10 +137,10 @@ function renderOutput() {
     for (const m of tok.result.matches.slice(0, 5)) {
       const li = document.createElement('li');
       if (state.dir === DIRECTIONS.CU_RU) {
-        li.append(span('cu', m.entry.headword), span('pos', m.entry.pos),
-          span(null, m.entry.ru.join('; ') || (m.entry.en || []).join('; ')));
+        li.append(span('cu', m.entry.headword), span('pos', LANG_SHORT[m.entry.lang] || ''),
+          span(m.entry.ru.length ? null : 'muted-i', m.entry.ru.join('; ') || (m.entry.en || []).join('; ')));
       } else {
-        li.append(span('cu', m.entry.headword), span('pos', m.entry.pos), span(null, m.entry.ru.join('; ')));
+        li.append(span('cu', m.entry.headword), span('pos', LANG_SHORT[m.entry.lang] || ''), span(null, m.entry.ru.join('; ')));
       }
       list.appendChild(li);
     }
@@ -156,9 +156,12 @@ function renderOutput() {
     b.type = 'button';
     const approx = tok.kind === 'stem' || tok.kind === 'fuzzy';
     b.className = 'tok ' + (!tok.found ? 'tok-unk' : approx ? 'tok-approx' : 'tok-ok')
+      + (tok.found && !tok.translated ? ' tok-en' : '')
       + (state.selected === tok.index ? ' tok-sel' : '');
     b.textContent = tok.out;
-    b.title = tok.found ? `${tok.text} → ${tok.out}` : `${tok.text}: нет в словаре`;
+    b.title = tok.found
+      ? `${tok.text} → ${tok.out}${tok.translated ? '' : ' (английский перевод)'}`
+      : `${tok.text}: нет в словаре`;
     b.addEventListener('click', () => {
       state.selected = tok.index;
       state.active = 0;
@@ -209,6 +212,16 @@ function renderEntry() {
       renderEntry();
     },
   });
+  // полная статья лежит в чанке по первой букве: подгружаем и перерисовываем
+  const shown = result && result.matches[Math.min(state.active, result.matches.length - 1)];
+  if (shown && shown.entry.chunk && !shown.entry.detail) {
+    const entry = shown.entry;
+    state.dict.loadDetail(entry).then((d) => {
+      const cur = currentResult();
+      const now = cur && cur.matches[Math.min(state.active, cur.matches.length - 1)];
+      if (d && now && now.entry === entry) renderEntry();
+    });
+  }
 }
 
 // ───── подсказки ─────
@@ -311,22 +324,59 @@ function loadHash() {
   if (p.get('q')) els.src.value = p.get('q');
 }
 
+// ───── источники и лицензии (сворачиваемый список в подвале) ─────
+async function loadSources() {
+  try {
+    const res = await fetch(`${import.meta.env.BASE_URL}data/sources.json`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const ul = $('sources-list');
+    ul.textContent = '';
+    for (const s of data.sources) {
+      const li = document.createElement('li');
+      if (s.url) {
+        const a = document.createElement('a');
+        a.href = s.url;
+        a.textContent = s.name;
+        a.rel = 'noopener';
+        li.appendChild(a);
+      } else {
+        li.append(s.name);
+      }
+      li.append(` — ${s.entries.toLocaleString('ru-RU')} статей. Лицензия: ${s.license || 'не указана'}`);
+      ul.appendChild(li);
+    }
+    $('sources').hidden = false;
+  } catch (_) { /* необязательно */ }
+}
+
 // ───── запуск ─────
 async function init() {
   applyDirection();
   renderOutput();
   renderEntry();
+  els.out.textContent = '';
+  els.out.appendChild(span('placeholder', 'Загрузка словаря…'));
   try {
-    const res = await fetch(`${import.meta.env.BASE_URL}data/dictionary.json`);
+    const base = `${import.meta.env.BASE_URL}data/`;
+    const res = await fetch(`${base}search_index.json`);
     if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-    const data = await res.json();
-    state.dict = new Dictionary(data.entries);
+    const index = await res.json();
+    // даём браузеру показать «Загрузка…», затем строим индекс поиска
+    await new Promise((r) => setTimeout(r, 0));
+    state.dict = Dictionary.fromIndex(index);
+    state.dict.chunkLoader = async (name) => {
+      const r = await fetch(`${base}chunks/${name}`);
+      if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+      return r.json();
+    };
   } catch (err) {
     els.out.textContent = '';
     els.out.appendChild(span('nf', 'Не удалось загрузить словарь: ' + err.message));
     return;
   }
-  els.stats.textContent = `В словаре ${state.dict.size} статей`;
+  els.stats.textContent = `В словаре ${state.dict.size.toLocaleString('ru-RU')} статей`;
+  loadSources();
   loadHash();
   applyDirection();
   run();

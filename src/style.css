@@ -167,3 +167,13 @@ textarea#src::placeholder { color: #94a3b8; }
   .hw { font-size: 1.7rem; }
   .topbar-inner { flex-wrap: wrap; }
 }
+
+.tok-en { font-style: italic; }
+.muted-i { color: var(--muted); font-style: italic; }
+.badge-lang { background: var(--bg); }
+.chip-more { color: var(--muted); border-style: dashed; }
+.loading { margin: 12px 0 0; color: var(--muted); font-size: .85rem; }
+.foot details { width: 100%; }
+.foot summary { cursor: pointer; }
+.foot ul { margin: 8px 0 0; padding-left: 1.2em; }
+.foot a { color: var(--accent); }

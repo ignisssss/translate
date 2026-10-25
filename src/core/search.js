@@ -13,6 +13,7 @@ import { expandTitlo } from './titlo.js';
  *   fuzzy  — похожее написание (одна опечатка).
  */
 export const KIND_ORDER = ['exact', 'form', 'titlo', 'loose', 'stem', 'fuzzy'];
+const LANG_RANK = { chu: 0, cs: 1, orv: 2 };
 
 const RU_ENDINGS = [
   'ешь', 'ишь', 'ами', 'ями', 'ого', 'его', 'ому', 'ему', 'ыми', 'ими',
@@ -27,12 +28,14 @@ function normalizeEntry(e, order) {
   return {
     ...e,
     id: e.id || e.headword,
+    lang: e.lang || 'chu',
     ru: e.ru || [],
     en: e.en || [],
     forms: e.forms || [],
     titlo: e.titlo || [],
     related: e.related || [],
     examples: e.examples || (e.example ? [e.example] : []),
+    detail: e.detail || null,
     order,
   };
 }
@@ -44,7 +47,28 @@ function push(map, key, entry) {
   else if (!list.includes(entry)) list.push(entry);
 }
 
+const splitList = (s, sep) => (s ? s.split(sep).filter(Boolean) : []);
+
 export class Dictionary {
+  /** Собирает словарь из компактного индекса (public/data/search_index.json). */
+  static fromIndex(index) {
+    const entries = index.entries.map((r) => {
+      const lang = index.langs[r[5]];
+      return {
+        id: r[0] + (lang === 'orv' ? '#orv' : ''),
+        headword: r[0],
+        pos: r[1],
+        ru: splitList(r[2], '; '),
+        en: splitList(r[3], '; '),
+        forms: splitList(r[4], ' ').map((f) => f.replace(/_/g, ' ')),
+        lang,
+        chunk: index.chunks[r[6]],
+        titlo: splitList(r[7], ' ').map((f) => f.replace(/_/g, ' ')),
+      };
+    });
+    return new Dictionary(entries);
+  }
+
   constructor(rawEntries) {
     this.entries = rawEntries.map(normalizeEntry);
     this.byId = new Map(this.entries.map((e) => [e.id, e]));
@@ -56,21 +80,27 @@ export class Dictionary {
     this.ruIndex = new Map(); // слово -> [{entry, rank}]
     this.looseList = []; // [ключ, статья] — все написания, для приблизительного поиска
     this.headList = []; // [ключ, статья] — только заглавные слова, для поиска по основе
+    this._lenBuckets = null;
+    this._chunks = new Map();
+    this.chunkLoader = null;
 
     for (const e of this.entries) {
-      this.byHeadword.set(strictKey(e.headword), e);
-      push(this.byHead, strictKey(e.headword), e);
+      const hk = strictKey(e.headword);
+      if (!this.byHeadword.has(hk)) this.byHeadword.set(hk, e);
+      push(this.byHead, hk, e);
       for (const f of e.forms) push(this.byForm, strictKey(f), e);
       for (const t of e.titlo) push(this.byTitlo, strictKey(t), e);
-      for (const k of looseKeys(e.headword)) this.headList.push([k, e]);
-      const variants = [e.headword, ...e.forms, ...e.titlo];
       const seen = new Set();
-      for (const v of variants) {
+      const addLoose = (v, isHead) => {
         for (const k of looseKeys(v)) {
           push(this.byLoose, k, e);
+          if (isHead) this.headList.push([k, e]);
           if (!seen.has(k)) { seen.add(k); this.looseList.push([k, e]); }
         }
-      }
+      };
+      addLoose(e.headword, true);
+      for (const v of e.forms) addLoose(v, false);
+      for (const v of e.titlo) addLoose(v, false);
       e.ru.forEach((meaning, mi) => {
         const words = ruKey(meaning).split(/[^а-я0-9]+/).filter(Boolean);
         words.forEach((w) => {
@@ -99,6 +129,24 @@ export class Dictionary {
     return this.byHeadword.get(strictKey(h)) || null;
   }
 
+  // ───── полные статьи (чанки) ─────
+
+  /** Подгружает полную статью из чанка по первой букве; возвращает Promise<detail | null>. */
+  loadDetail(entry) {
+    if (entry.detail) return Promise.resolve(entry.detail);
+    if (!entry.chunk || !this.chunkLoader) return Promise.resolve(null);
+    let p = this._chunks.get(entry.chunk);
+    if (!p) {
+      p = this.chunkLoader(entry.chunk).catch(() => null);
+      this._chunks.set(entry.chunk, p);
+    }
+    return p.then((data) => {
+      const d = data && data[entry.id];
+      if (d) entry.detail = d;
+      return d || null;
+    });
+  }
+
   // ───── старославянский → русский ─────
 
   /** Разрешает написание в статьи без приблизительных стадий. */
@@ -111,7 +159,22 @@ export class Dictionary {
     if (!found.length) {
       for (const k of looseKeys(q)) (this.byLoose.get(k) || []).forEach((e) => add(e, 'loose'));
     }
+    // сначала старославянские статьи, затем церковнославянские и древнерусские; внутри языка — по точности
+    found.sort((a, b) => LANG_RANK[a.entry.lang] - LANG_RANK[b.entry.lang]
+      || KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
     return found;
+  }
+
+  _buckets() {
+    if (!this._lenBuckets) {
+      this._lenBuckets = new Map();
+      for (const item of this.looseList) {
+        const n = item[0].length;
+        if (!this._lenBuckets.has(n)) this._lenBuckets.set(n, []);
+        this._lenBuckets.get(n).push(item);
+      }
+    }
+    return this._lenBuckets;
   }
 
   findCu(raw, { approx = true } = {}) {
@@ -145,24 +208,27 @@ export class Dictionary {
         for (const stem of VOWEL_END.test(k) ? [k, k.slice(0, -1)] : [k]) {
           if (stem.length < 3) continue;
           for (const tk of keys) {
-            if (tk.startsWith(stem) && tk.length - stem.length <= 3) stems.push({ entry, len: stem.length });
+            if (tk.length - stem.length <= 3 && tk.startsWith(stem)) stems.push({ entry, len: stem.length });
           }
         }
       }
       stems.sort((a, b) => b.len - a.len || a.entry.order - b.entry.order);
-      stems.forEach((s) => add(s.entry, 'stem'));
+      stems.slice(0, 8).forEach((s) => add(s.entry, 'stem'));
 
       if (!matches.length) {
         const fuzzy = [];
+        const buckets = this._buckets();
         for (const tk of keys) {
-          if (tk.length < 4) continue;
-          for (const [k, entry] of this.looseList) {
-            const d = editDistance(tk, k, 1);
-            if (d <= 1) fuzzy.push({ entry, d });
+          if (tk.length < 5) continue;
+          for (const n of [tk.length - 1, tk.length, tk.length + 1]) {
+            for (const [k, entry] of buckets.get(n) || []) {
+              const d = editDistance(tk, k, 1);
+              if (d <= 1) fuzzy.push({ entry, d });
+            }
           }
         }
         fuzzy.sort((a, b) => a.d - b.d || a.entry.order - b.entry.order);
-        fuzzy.forEach((f) => add(f.entry, 'fuzzy'));
+        fuzzy.slice(0, 8).forEach((f) => add(f.entry, 'fuzzy'));
       }
     }
     return result;
@@ -172,24 +238,30 @@ export class Dictionary {
     const q = isLatin((raw || '').trim()) ? latinToCyrillic(raw.trim()) : (raw || '').trim();
     const keys = looseKeys(q);
     if (!keys.length) return [];
-    const out = [];
+    const heads = [];
     const seen = new Set();
-    const consider = (entry, via) => {
-      if (seen.has(entry)) return;
-      seen.add(entry);
-      out.push({ entry, via });
-    };
-    for (const e of this.entries) {
-      const hk = looseKeys(e.headword);
-      if (keys.some((k) => hk.some((h) => h.startsWith(k)))) consider(e, null);
-    }
-    if (out.length < limit) {
-      for (const [k, e] of this.looseList) {
-        if (keys.some((q2) => k.startsWith(q2))) consider(e, k);
-        if (out.length >= limit * 2) break;
+    for (const [k, e] of this.headList) {
+      if (seen.has(e)) continue;
+      if (keys.some((q2) => k.startsWith(q2))) {
+        seen.add(e);
+        heads.push({ entry: e, via: null, len: k.length });
+        if (heads.length >= 400) break;
       }
     }
-    return out.slice(0, limit);
+    // сначала короткие слова (ближе к введённому), при равенстве — по приоритету статьи
+    heads.sort((a, b) => a.len - b.len || a.entry.order - b.entry.order);
+    const out = heads.slice(0, limit);
+    if (out.length < limit) {
+      for (const [k, e] of this.looseList) {
+        if (seen.has(e)) continue;
+        if (keys.some((q2) => k.startsWith(q2))) {
+          seen.add(e);
+          out.push({ entry: e, via: k });
+          if (out.length >= limit) break;
+        }
+      }
+    }
+    return out;
   }
 
   // ───── русский → старославянский ─────
@@ -205,32 +277,38 @@ export class Dictionary {
       if (!matches.some((m) => m.entry === entry)) matches.push({ entry, kind, rank });
     };
 
-    (this.ruIndex.get(key) || []).slice().sort((a, b) => a.rank - b.rank || a.entry.order - b.entry.order)
-      .forEach((x) => add(x.entry, 'exact', x.rank));
+    // rank < 3: слово — целое значение статьи; rank >= 3: слово только упомянуто в длинном толковании
+    const exact = (this.ruIndex.get(key) || []).slice().sort((x, y) => x.rank - y.rank || x.entry.order - y.entry.order);
+    exact.filter((x) => x.rank < 3).slice(0, 8).forEach((x) => add(x.entry, 'exact', x.rank));
 
-    // совпадение с заглавным словом старославянского (дом -> домъ)
     if (!matches.length && approx) {
       const ending = RU_ENDINGS.find((en) => key.length - en.length >= 3 && key.endsWith(en));
       const stem = ending ? key.slice(0, -ending.length) : key;
+      const weakStem = [];
       if (stem.length >= 3) {
         const verbal = VERB_ENDING.test(key);
         const cands = [];
         for (const t of this.ruTokens) {
           if (!t.startsWith(stem) || t.length - stem.length > 4) continue;
           for (const x of this.ruIndex.get(t)) {
-            const bonus = verbal === /(ть|ти)$/.test(t) ? 0 : 1;
-            cands.push({ entry: x.entry, score: (t.length - stem.length) + bonus + x.rank / 10 });
+            const bonus = verbal === /(ть|ти)$/.test(t) ? 0 : 3;
+            cands.push({ entry: x.entry, rank: x.rank, score: (t.length - stem.length) + bonus + x.rank / 10 });
           }
         }
-        cands.sort((a, b) => a.score - b.score || a.entry.order - b.entry.order);
-        cands.forEach((c) => add(c.entry, 'stem', c.score));
+        cands.sort((x, y) => x.score - y.score || x.entry.order - y.entry.order);
+        cands.filter((c) => c.rank < 3).slice(0, 8).forEach((c) => add(c.entry, 'stem', c.score));
+        cands.filter((c) => c.rank >= 3).slice(0, 8).forEach((c) => weakStem.push(c));
       }
+      if (!matches.length) exact.slice(0, 8).forEach((x) => add(x.entry, 'exact', x.rank));
+      if (!matches.length) weakStem.forEach((c) => add(c.entry, 'stem', c.score));
       if (!matches.length && key.length >= 5) {
         const fuzzy = [];
         for (const t of this.ruTokens) {
-          if (editDistance(key, t, 1) <= 1) for (const x of this.ruIndex.get(t)) fuzzy.push(x.entry);
+          if (Math.abs(t.length - key.length) <= 1 && editDistance(key, t, 1) <= 1) {
+            for (const x of this.ruIndex.get(t)) fuzzy.push(x.entry);
+          }
         }
-        fuzzy.forEach((e) => add(e, 'fuzzy', 9));
+        fuzzy.slice(0, 8).forEach((e) => add(e, 'fuzzy', 9));
       }
     }
     return result;
@@ -247,10 +325,10 @@ export class Dictionary {
         if (x.rank > 2 && key.length < 3) continue;
         if (seen.has(x.entry)) continue;
         seen.add(x.entry);
-        out.push({ entry: x.entry, via: t, rank: x.rank });
+        out.push({ entry: x.entry, via: t, rank: x.rank, len: t.length });
       }
     }
-    out.sort((a, b) => a.rank - b.rank || a.entry.order - b.entry.order);
+    out.sort((a, b) => a.rank - b.rank || a.len - b.len || a.entry.order - b.entry.order);
     return out.slice(0, limit);
   }
 }

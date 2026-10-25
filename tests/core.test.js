@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { looseKeys, strictKey, stripMarks, transliterate, latinToCyrillic } from '../src/core/normalizer.js';
 import { Dictionary } from '../src/core/search.js';
 import { translateText, DIRECTIONS } from '../src/core/translator.js';
 
-const raw = JSON.parse(readFileSync(new URL('../public/data/dictionary.json', import.meta.url), 'utf8'));
+const raw = JSON.parse(readFileSync(new URL('../data/curated/dictionary.json', import.meta.url), 'utf8'));
 const dict = new Dictionary(raw.entries);
 const top = (res) => res.matches[0] && res.matches[0].entry.headword;
 
@@ -116,4 +116,66 @@ test('предложение: пословный разбор', () => {
   const unk = translateText(dict, 'зzzzz богъ', DIRECTIONS.CU_RU);
   assert.equal(unk.tokens.filter((t) => t.word)[0].found, false);
   assert.equal(translateText(dict, 'богъ', DIRECTIONS.CU_RU).mode, 'word');
+});
+
+// ───── собранная база (public/data/, строится scripts/build_full_dictionary.py) ─────
+// Тесты подстраиваются под состав сборки: полная, без части источников или только ручные статьи.
+const dataUrl = (name) => new URL(`../public/data/${name}`, import.meta.url);
+const hasIndex = existsSync(dataUrl('search_index.json')) && existsSync(dataUrl('sources.json'));
+const built = hasIndex
+  ? {
+    index: JSON.parse(readFileSync(dataUrl('search_index.json'), 'utf8')),
+    sources: new Set(JSON.parse(readFileSync(dataUrl('sources.json'), 'utf8')).sources.map((x) => x.id)),
+  }
+  : null;
+// нижняя граница размера: ручные статьи всегда есть; большие источники поднимают планку
+const minCount = !built ? 0
+  : built.sources.has('dyachenko') || built.sources.has('ruwikt') ? 15000
+    : built.sources.has('kaikki') ? 3000
+      : raw.entries.length - 5;
+
+test('собранная база: загрузка и поиск', { skip: !hasIndex }, () => {
+  const { index } = built;
+  const t0 = performance.now();
+  const full = Dictionary.fromIndex(index);
+  const ms = performance.now() - t0;
+  assert.ok(index.count >= minCount, `статей: ${index.count}, ожидалось не меньше ${minCount}`);
+  assert.equal(full.size, index.count);
+  assert.ok(ms < 4000, `индекс строится ${ms.toFixed(0)} мс`);
+  // ручные статьи остаются первыми и выигрывают при омонимии
+  assert.equal(full.findCu('богъ').matches[0].entry.ru[0], 'бог');
+  assert.equal(full.findCu('бг҃ъ').matches[0].kind, 'titlo');
+  assert.ok(full.findCu('чловѣкъ').matches.length >= 1);
+  assert.equal(full.findRu('бог').matches[0].entry.headword, 'богъ');
+  // изменённые русские формы ищутся по основе, а не по случайному слову из чужого толкования
+  assert.equal(full.findRu('бога').matches[0].entry.headword, 'богъ');
+  assert.equal(full.findRu('любит').matches[0].entry.headword, 'любити');
+  // старославянская статья выше древнерусской, даже если у неё совпадение только по форме
+  assert.equal(full.findCu('вельми').matches[0].entry.lang, 'chu');
+  // слова из Дьяченко проверяем только если источник вошёл в сборку
+  if (built.sources.has('dyachenko')) {
+    const cs = full.findCu('отроковица').matches[0];
+    assert.ok(cs && cs.entry.ru.length);
+  }
+  // древнерусские статьи есть только вместе с источником pitt-orv или русским Викисловарём
+  assert.equal(full.entries.some((e) => e.lang === 'orv'), built.sources.has('pitt-orv') || built.sources.has('ruwikt'));
+  // номера омонимов из Викисловаря не попадают в значения
+  assert.ok(full.entries.every((e) => e.ru.every((m) => !/\[\d+\]/.test(m))));
+  // каждая статья ссылается на существующий чанк
+  assert.ok(full.entries.every((e) => index.chunks.includes(e.chunk)));
+  // скорость поиска
+  const t1 = performance.now();
+  for (let i = 0; i < 50; i++) { full.suggestCu('бл'); full.suggestRu('бла'); full.findCu('богомь'); }
+  assert.ok(performance.now() - t1 < 1500, 'поиск медленный');
+});
+
+test('собранная база: чанки содержат полные статьи', { skip: !hasIndex }, async () => {
+  const full = Dictionary.fromIndex(built.index);
+  full.chunkLoader = async (name) => JSON.parse(readFileSync(dataUrl(`chunks/${name}`), 'utf8'));
+  const e = full.findCu('богъ').matches[0].entry;
+  const d = await full.loadDetail(e);
+  assert.ok(d && d.ru.includes('бог') && d.sources.includes('manual'));
+  // первая, средняя и последняя статьи индекса и слово с юсом
+  const probes = [full.entries[0], full.entries[full.size >> 1], full.entries[full.size - 1], full.findCu('рѫка').matches[0].entry];
+  for (const x of probes) assert.ok(await full.loadDetail(x), x.headword);
 });
