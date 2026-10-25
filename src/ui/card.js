@@ -63,7 +63,100 @@ export function entryView(e) {
     sources: d.sources || e.sources || [],
     attested: d.attested || [],
     freq: d.freq || 0,
+    paradigm: d.paradigm || null,
   };
+}
+
+// ───── таблицы форм ─────
+const CASES = ['nom', 'gen', 'dat', 'acc', 'ins', 'loc', 'voc'];
+const PERSONS = ['1', '2', '3'];
+const NUMBERS = ['sg', 'du', 'pl'];
+const LABEL = {
+  nom: 'Им.', gen: 'Род.', dat: 'Дат.', acc: 'Вин.', ins: 'Тв.', loc: 'Мест.', voc: 'Зв.',
+  1: '1 л.', 2: '2 л.', 3: '3 л.',
+  sg: 'ед.', du: 'дв.', pl: 'мн.',
+  m: 'м. р.', f: 'ж. р.', n: 'ср. р.', short: 'краткая форма', long: 'полная форма',
+  pres: 'Настоящее время', aor: 'Аорист', impf: 'Имперфект', imp: 'Повелительное наклонение',
+  fut: 'Будущее время', cond: 'Условное наклонение', inf: 'Инфинитив', sup: 'Супин',
+};
+const GROUP_ORDER = ['short', 'long', 'm', 'f', 'n', 'pres', 'aor', 'impf', 'imp', 'fut', 'cond', 'inf', 'sup'];
+
+/** Делит ячейки на группы (род и тип формы, время) и размечает строки и столбцы таблиц. */
+function paradigmGroups(paradigm) {
+  const groups = new Map();
+  for (const [cell, forms] of Object.entries(paradigm)) {
+    const codes = cell.split('.');
+    const row = codes.find((c) => CASES.includes(c) || PERSONS.includes(c));
+    const col = codes.find((c) => NUMBERS.includes(c));
+    const rest = codes.filter((c) => c !== row && c !== col);
+    const key = rest.join('.');
+    if (!groups.has(key)) groups.set(key, { rest, cells: new Map() });
+    groups.get(key).cells.set(`${row || ''}|${col || ''}`, forms);
+  }
+  const rank = (g) => g.rest.map((c) => GROUP_ORDER.indexOf(c)).reduce((a, b) => a * 20 + (b + 1), 0);
+  return [...groups.values()].sort((a, b) => rank(a) - rank(b));
+}
+
+function paradigmTable(group, onPickForm) {
+  const rowsAll = [...CASES, ...PERSONS];
+  const rows = rowsAll.filter((r) => [...group.cells.keys()].some((k) => k.split('|')[0] === r));
+  const cols = NUMBERS.filter((n) => [...group.cells.keys()].some((k) => k.split('|')[1] === n));
+  const wrap = el('div', 'para-group');
+  if (group.rest.length) {
+    wrap.appendChild(el('div', 'para-title', group.rest.map((c) => LABEL[c] || c).join(', ')));
+  }
+  if (!rows.length) {
+    // формы без падежа и лица (инфинитив, супин)
+    const list = el('div', 'chips');
+    for (const forms of group.cells.values()) list.appendChild(formCell(forms, onPickForm, 'chip cu'));
+    wrap.appendChild(list);
+    return wrap;
+  }
+  const table = el('table', 'para');
+  const head = el('tr');
+  head.appendChild(el('th'));
+  for (const c of cols) head.appendChild(el('th', null, LABEL[c]));
+  table.appendChild(head);
+  for (const r of rows) {
+    const tr = el('tr');
+    tr.appendChild(el('th', null, LABEL[r]));
+    for (const c of cols) {
+      const td = el('td');
+      const forms = group.cells.get(`${r}|${c}`);
+      if (forms) td.appendChild(formCell(forms, onPickForm, 'form cu'));
+      else td.textContent = '\u2014';
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function formCell(forms, onPickForm, cls) {
+  const box = document.createElement('span');
+  forms.forEach((f, i) => {
+    if (i) box.append(', ');
+    const n = onPickForm ? el('button', cls + ' form-btn') : el('span', cls);
+    if (onPickForm) {
+      n.type = 'button';
+      n.title = 'Вставить в поле ввода';
+      n.addEventListener('click', () => onPickForm(f));
+    }
+    n.textContent = f;
+    box.appendChild(n);
+  });
+  return box;
+}
+
+function paradigmBlock(paradigm, onPickForm) {
+  const n = Object.keys(paradigm).length;
+  const det = el('details', 'para-wrap');
+  if (n <= 24) det.open = true;
+  det.appendChild(el('summary', null, `Таблица форм (${n})`));
+  for (const g of paradigmGroups(paradigm)) det.appendChild(paradigmTable(g, onPickForm));
+  if (onPickForm) det.appendChild(el('p', 'sub', 'Нажмите на форму, чтобы вставить её в поле ввода.'));
+  return det;
 }
 
 function row(dl, label, node) {
@@ -173,7 +266,8 @@ export function renderCard(root, ctx) {
 
   const gram = el('div');
   gram.appendChild(el('p', null, e.grammar || e.pos || 'Грамматические сведения не указаны'));
-  const forms = [...e.forms];
+  if (e.paradigm) gram.appendChild(paradigmBlock(e.paradigm, ctx.onPickForm));
+  const forms = e.paradigm ? [] : [...e.forms];
   if (forms.length) {
     gram.appendChild(el('p', 'sub', 'Формы слова'));
     gram.appendChild(chips(forms));

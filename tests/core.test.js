@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { looseKeys, strictKey, stripMarks, transliterate, latinToCyrillic } from '../src/core/normalizer.js';
 import { Dictionary } from '../src/core/search.js';
 import { translateText, DIRECTIONS } from '../src/core/translator.js';
@@ -178,4 +178,32 @@ test('собранная база: чанки содержат полные ст
   // первая, средняя и последняя статьи индекса и слово с юсом
   const probes = [full.entries[0], full.entries[full.size >> 1], full.entries[full.size - 1], full.findCu('рѫка').matches[0].entry];
   for (const x of probes) assert.ok(await full.loadDetail(x), x.headword);
+});
+
+test('собранная база: таблицы форм из Викисловаря', { skip: !hasIndex }, () => {
+  const cell = /^(?:(?:short|long)\.)?(?:(?:m|f|n)\.)?(?:(?:pres|aor|impf|imp|fut|cond)\.)?(?:(?:1|2|3)\.)?(?:(?:nom|gen|dat|acc|ins|loc|voc)\.)?(?:sg|du|pl)$|^(?:inf|sup)$/;
+  let withParadigm = 0;
+  const found = {};
+  for (const name of readdirSync(dataUrl('chunks/'))) {
+    const chunk = JSON.parse(readFileSync(dataUrl(`chunks/${name}`), 'utf8'));
+    for (const [id, d] of Object.entries(chunk)) {
+      if (!d.paradigm) continue;
+      withParadigm++;
+      for (const [k, forms] of Object.entries(d.paradigm)) {
+        assert.ok(cell.test(k), `${id}: неизвестная ячейка ${k}`);
+        assert.ok(Array.isArray(forms) && forms.length && forms.every((f) => typeof f === 'string' && f), `${id}: ${k}`);
+      }
+      found[id] = d.paradigm;
+    }
+  }
+  if (built.sources.has('ruwikt')) {
+    assert.ok(withParadigm >= 1000, `таблиц форм: ${withParadigm}`);
+    assert.ok(found['вода']['gen.sg'].includes('водꙑ'));
+    assert.ok(found['вода']['nom.sg'].includes('вода'));
+  }
+});
+
+test('синодальная часть church-slavonic (Поляков) не используется', { skip: !hasIndex }, () => {
+  const text = readFileSync(new URL('../scripts/build_full_dictionary.py', import.meta.url), 'utf8');
+  assert.ok(!/syn\/(nouns|verbs|adjectives|pronouns|closed)/.test(text.replace(/#.*$/gm, '')), 'в сборке остались файлы syn/');
 });

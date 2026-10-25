@@ -204,6 +204,15 @@ function renderEntry() {
     result,
     active: state.active,
     onSelectMatch: (i) => { state.active = i; renderEntry(); },
+    // в таблице форм можно нажать на форму и вставить её в поле ввода (только когда слева старославянский)
+    onPickForm: state.dir === DIRECTIONS.CU_RU ? (f) => {
+      const a = els.src.selectionStart ?? els.src.value.length;
+      const b = els.src.selectionEnd ?? a;
+      const pre = els.src.value.slice(0, a);
+      els.src.setRangeText((pre && !/\s$/.test(pre) ? ' ' : '') + f, a, b, 'end');
+      els.src.focus();
+      schedule(0);
+    } : null,
     onOpenHeadword: (h) => {
       const e = state.dict.getByHeadword(h);
       if (!e) return;

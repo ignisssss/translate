@@ -10,10 +10,10 @@
   },
   {
    "id": "lexicon",
-   "name": "church-slavonic: лексикон (части речи, род, ударения)",
+   "name": "church-slavonic: старославянский лексикон (части речи, род)",
    "url": "https://github.com/gold-silver-copper/church-slavonic",
-   "license": "Apache-2.0 / MIT (данные частично получены из других источников)",
-   "entries": 8389
+   "license": "код MIT/Apache-2.0; данные старославянской части получены из Викисловаря (CC BY-SA 4.0)",
+   "entries": 5665
   },
   {
    "id": "syntacticus",

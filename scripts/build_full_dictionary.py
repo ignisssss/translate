@@ -16,7 +16,7 @@
   chu-gloss      Old Church Slavonic Glossary (chu-eng), DSL            pod-o-mart/lingvo
   pitt-chu       Pitt chu-eng (только слова без условной записи), DSL   pod-o-mart/lingvo
   pitt-orv       Pitt orv-rus (древнерусский), DSL                      pod-o-mart/lingvo
-  lexicon        грамматика, ударения, части речи (TSV)   gold-silver-copper/church-slavonic
+  lexicon        части речи и род для старославянских слов (ocs/*.tsv)   gold-silver-copper/church-slavonic
   syntacticus    формы и частоты из корпусов (chu.xml, orv.xml)         proiel/syntacticus-dictionaries
   kaikki         английский Викисловарь, язык cu (JSONL)                 kaikki.org
   ruwikt         русский Викисловарь: старославянский, церковнославянский,
@@ -75,7 +75,9 @@ DSL_ZIPS = {
     "pitt-chu": "chu-eng_pitt-edu_podomart_2_1.zip",
     "pitt-orv": "orv-rus_pitt-edu_podomart_2_2.zip",
 }
-LEXICON_FILES = [f"{d}/{n}.tsv" for d in ("ocs", "syn") for n in ("nouns", "verbs", "adjectives", "pronouns")] + ["syn/closed.tsv"]
+# только старославянская часть (ocs/): она построена на данных Викисловаря (CC BY-SA 4.0).
+# Часть syn/ (Synodal) основана на словаре Полякова, права на неё в репозитории не подтверждены — не используем.
+LEXICON_FILES = [f"ocs/{n}.tsv" for n in ("nouns", "verbs", "adjectives", "pronouns")]
 
 SOURCE_INFO = {
     "manual": ("Вручную составленный словарь проекта", "", "авторская работа проекта"),
@@ -85,7 +87,7 @@ SOURCE_INFO = {
     "chu-gloss": ("Old Church Slavonic Glossary (chu-eng), DSL, podomart", "https://github.com/pod-o-mart/lingvo", "лицензия не указана"),
     "pitt-chu": ("Old Church Slavonic–English (Pitt), DSL, podomart", "https://github.com/pod-o-mart/lingvo", "лицензия не указана"),
     "pitt-orv": ("Древнерусско-русский словарь (Pitt), DSL, podomart", "https://github.com/pod-o-mart/lingvo", "лицензия не указана"),
-    "lexicon": ("church-slavonic: лексикон (части речи, род, ударения)", "https://github.com/gold-silver-copper/church-slavonic", "Apache-2.0 / MIT (данные частично получены из других источников)"),
+    "lexicon": ("church-slavonic: старославянский лексикон (части речи, род)", "https://github.com/gold-silver-copper/church-slavonic", "код MIT/Apache-2.0; данные старославянской части получены из Викисловаря (CC BY-SA 4.0)"),
     "syntacticus": ("Syntacticus dictionaries (PROIEL / TOROT): леммы, формы, частоты", "https://github.com/proiel/syntacticus-dictionaries", "CC BY-NC-SA 3.0/4.0 (некоммерческое использование, ShareAlike)"),
     "kaikki": ("Английский Викисловарь, язык cu (выгрузка Kaikki.org / wiktextract)", "https://kaikki.org/dictionary/Old%20Church%20Slavonic/", "CC BY-SA 4.0 (ShareAlike)"),
     "ruwikt": ("Русский Викисловарь: старославянский, церковнославянский, древнерусский (выгрузка Kaikki.org / wiktextract)", "https://kaikki.org/ruwiktionary/", "CC BY-SA 4.0 (ShareAlike)"),
@@ -177,11 +179,73 @@ def download(url: str, dest: Path, refresh: bool = False) -> Path | None:
 
 
 # ───────────────────────────── записи ─────────────────────────────
+# ───────────────────────────── таблицы форм (из меток Викисловаря) ─────────────────────────────
+P_CASE = {"nominative": "nom", "genitive": "gen", "dative": "dat", "accusative": "acc", "instrumental": "ins",
+          "locative": "loc", "prepositional": "loc", "vocative": "voc"}
+P_NUM = {"singular": "sg", "dual": "du", "plural": "pl"}
+P_GEN = {"masculine": "m", "feminine": "f", "neuter": "n"}
+P_PERS = {"first-person": "1", "second-person": "2", "third-person": "3"}
+P_TENSE = {"present": "pres", "aorist": "aor", "imperfect": "impf", "imperative": "imp", "future": "fut", "conditional": "cond"}
+P_FORM = {"short-form": "short", "long-form": "long"}
+P_SINGLE = {"infinitive": "inf", "supine": "sup"}
+# метки, которые ничего не говорят о ячейке таблицы
+P_IGNORE = {"non-thematic", "thematic", "personal", "pronoun", "possessive", "table-tags", "inflection-template", "class"}
+
+
+def build_paradigm(obj: dict) -> dict:
+    """Метки форм Викисловаря -> {ячейка: [формы]}; ячейка = форма.род.время.лицо.падеж.число (например nom.sg)."""
+    verb = obj.get("pos") == "verb"
+    cells: dict[str, list[str]] = {}
+    for f in obj.get("forms", []):
+        tags = set(f.get("tags", []))
+        word = clean_word(f.get("form", "")).lower()
+        if not tags or not word or " " in word or not head_ok(word):
+            continue
+        known = set(P_CASE) | set(P_NUM) | set(P_GEN) | set(P_PERS) | set(P_TENSE) | set(P_FORM) | set(P_SINGLE) | P_IGNORE
+        if tags - known:
+            continue  # причастия, ошибки разбора и прочие неподдерживаемые метки
+        num = [P_NUM[t] for t in tags if t in P_NUM]
+        if verb:
+            single = [P_SINGLE[t] for t in tags if t in P_SINGLE]
+            tense = [P_TENSE[t] for t in tags if t in P_TENSE]
+            pers = [P_PERS[t] for t in tags if t in P_PERS]
+            if tags & (set(P_GEN) | set(P_CASE) | set(P_FORM)):
+                continue  # согласуемые формы (причастия) не показываем
+            keys = [[s] for s in single] if single and not tense else (
+                [[t, p, n] for t in tense for p in pers for n in num] if tense and pers and num else [])
+        else:
+            case = [P_CASE[t] for t in tags if t in P_CASE]
+            if not case or not num or tags & (set(P_TENSE) | set(P_PERS) | set(P_SINGLE)):
+                continue
+            gen = [P_GEN[t] for t in tags if t in P_GEN] or [""]
+            form = [P_FORM[t] for t in tags if t in P_FORM] or [""]
+            keys = [[fm, g, c, n] for fm in form for g in gen for c in case for n in num]
+        for k in keys:
+            cell = ".".join(x for x in k if x)
+            if word not in cells.setdefault(cell, []):
+                cells[cell].append(word)
+    return cells if len(cells) >= 4 else {}
+
+
+def merge_paradigms(recs: list[dict]) -> dict:
+    """Берёт самую полную таблицу и добавляет к её ячейкам варианты из остальных."""
+    tables = [r["paradigm"] for r in recs if r.get("paradigm")]
+    if not tables:
+        return {}
+    tables.sort(key=len, reverse=True)
+    out = {k: list(v) for k, v in tables[0].items()}
+    for t in tables[1:]:
+        for k, v in t.items():
+            if k in out:
+                out[k] = uniq(out[k] + v)[:3]
+    return out
+
+
 def new_rec(src: str, lang: str, head: str, **kw) -> dict:
     rec = {
         "src": src, "lang": lang, "head": head, "variants": [], "pos": "", "ru": [], "en": [],
         "gloss": "", "grammar": "", "forms": [], "stress": "", "etymology": "", "examples": [],
-        "greek": "", "note": "", "titlo": [], "related": [], "form_of": None,
+        "greek": "", "note": "", "titlo": [], "related": [], "form_of": None, "paradigm": {},
     }
     rec.update(kw)
     return rec
@@ -493,7 +557,8 @@ def parse_kaikki(path: Path) -> list[dict]:
                      if not (set(f.get("tags", [])) & {"romanization", "table-tags", "inflection-template", "class"})]
             rec = new_rec("kaikki", "chu", head, pos=KAIKKI_POS[o["pos"]], en=uniq(en)[:6],
                           forms=[f for f in forms if head_ok(f) and f != head], examples=ex[:2],
-                          etymology=re.sub(r"\s+", " ", o.get("etymology_text") or "").strip()[:400])
+                          etymology=re.sub(r"\s+", " ", o.get("etymology_text") or "").strip()[:400],
+                          paradigm=build_paradigm(o))
             k = loose_key(head)
             if k in lemmas:
                 lemmas[k]["en"] = uniq(lemmas[k]["en"] + rec["en"])[:8]
@@ -566,7 +631,8 @@ def parse_ruwikt(path: Path, code: str, lang: str) -> list[dict]:
                        for x in o.get(k, []) if isinstance(x, dict) and x.get("word")]
             rec = new_rec("ruwikt", lang, head, pos=RUWIKT_POS.get(o.get("pos", ""), ""), ru=uniq(ru)[:14],
                           forms=uniq(forms)[:30], examples=ex[:2], etymology=etym,
-                          related=[r for r in uniq(related) if head_ok(r) and r != head][:12])
+                          related=[r for r in uniq(related) if head_ok(r) and r != head][:12],
+                          paradigm=build_paradigm(o))
             rec["form_of"] = form_of if not rec["ru"] else None
             if rec["ru"] or rec["form_of"]:
                 recs.append(rec)
@@ -680,6 +746,7 @@ def merge(records: list[dict]):
             "examples": [x for r in recs for x in r["examples"]][:4],
             "related": uniq([x for r in recs for x in r["related"]]),
             "titlo": uniq([x for r in recs for x in r["titlo"]]),
+            "paradigm": merge_paradigms(recs),
             "variants": [], "forms": [], "sources": sorted({r["src"] for r in recs}, key=lambda s: PRIORITY[s]),
             "freq": 0, "attested": [],
         }
@@ -806,6 +873,8 @@ def write_output(merged, extra_sources: dict):
             detail["forms"] = e["forms"][:80]
         if e["titlo"]:
             detail["titlo"] = e["titlo"]
+        if e["paradigm"]:
+            detail["paradigm"] = e["paradigm"]
         if e["freq"]:
             detail["freq"] = e["freq"]
         if e["attested"]:
@@ -965,6 +1034,7 @@ def main() -> int:
     print(f"  с ударением:                 {sum(1 for e in entries if e['stress'])}")
     print(f"  с примерами:                 {sum(1 for e in entries if e['examples'])}")
     print(f"  с титлом:                    {sum(1 for e in entries if e['titlo'])}")
+    print(f"  с таблицей форм:             {sum(1 for e in entries if e['paradigm'])}")
     print(f"  со связанными словами:       {sum(1 for e in entries if e['related'])}")
     print(f"Лексикон church-slavonic:      {lex_total} лексем, из них с переводом в базе: {lex_matched} "
           f"(остальные без перевода в базу не включены)")
